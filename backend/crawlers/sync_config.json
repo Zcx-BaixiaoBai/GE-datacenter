@@ -1,0 +1,10 @@
+{
+  "ruixin_interval_min": 60,
+  "ruixin_output_path": "",
+  "budget_interval_min": 60,
+  "budget_output_path": "",
+  "sd123_interval_min": 60,
+  "sd123_output_path": "",
+  "jy_interval_min": 60,
+  "jy_output_path": ""
+}

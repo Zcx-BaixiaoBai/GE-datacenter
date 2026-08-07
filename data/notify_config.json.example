@@ -1,0 +1,6 @@
+{
+  "enabled": false,
+  "daily_time": "09:00",
+  "projects": {},
+  "feishu": {"app_id": "", "app_secret": ""}
+}

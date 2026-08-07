@@ -1,0 +1,127 @@
+/* 金鹰集团数据管理中心 - 简洁白色风格 */
+
+:root {
+  --bg-page: #f6f8fa;
+  --bg-card: #ffffff;
+  --bg-hover: #f3f4f6;
+  --bg-sidebar: #ffffff;
+  --border: #e1e4e8;
+  --border-subtle: #ebeef0;
+  --text-1: #1f2328;
+  --text-2: #656d76;
+  --text-3: #8c959f;
+  --accent: #0969da;
+  --green: #1a7f37;
+  --yellow: #9a6700;
+  --red: #cf222e;
+  --purple: #8250df;
+  --radius: 10px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 3px rgba(0,0,0,.06);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.04);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  margin: 0; padding: 0; height: 100%;
+  background: var(--bg-page);
+  color: var(--text-1);
+  font-family: -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  font-size: 13px; line-height: 1.5;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d0d7de; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #afb8c1; }
+
+/* ─── 通用 ─── */
+.page-container { padding: 20px 24px; }
+.section-title {
+  font-size: 12px; font-weight: 600; color: var(--text-2);
+  margin-bottom: 12px; padding-left: 0;
+}
+
+/* ─── KPI 卡片 (白底+圆角+阴影, 紧凑) ─── */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.kpi-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.15s;
+}
+.kpi-card:hover { box-shadow: var(--shadow); }
+.kpi-card .label { color: var(--text-3); font-size: 11px; margin-bottom: 4px; }
+.kpi-card .value { font-size: 20px; font-weight: 600; color: var(--text-1); letter-spacing: -0.02em; }
+.kpi-card .sub { color: var(--text-3); font-size: 10px; margin-top: 2px; }
+
+/* ─── 表格 (圆角, 紧凑) ─── */
+.data-table {
+  width: 100%; border-collapse: separate; border-spacing: 0;
+  font-size: 12px; background: var(--bg-card);
+  border-radius: var(--radius); overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.data-table th {
+  background: #f9fafb; color: var(--text-3); font-weight: 500; font-size: 11px;
+  text-align: left; padding: 7px 10px;
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.data-table td {
+  padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); color: var(--text-1);
+}
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td { background: var(--bg-hover); }
+.data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ─── 状态标签 (圆点+文字) ─── */
+.status-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; }
+.status-tag::before { content: ''; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.status-tag.good::before { background: var(--green); }
+.status-tag.warn::before { background: var(--yellow); }
+.status-tag.bad::before { background: var(--red); }
+
+/* ─── 图表容器 (圆角白卡) ─── */
+.chart-container {
+  background: var(--bg-card); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+}
+.chart-title { font-size: 11px; font-weight: 600; color: var(--text-2); margin-bottom: 10px; }
+
+/* ─── 进度条 (圆角细线) ─── */
+.progress-bar { height: 4px; background: #eef0f2; border-radius: 4px; overflow: hidden; }
+.progress-bar .fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+.progress-bar .fill.green { background: var(--green); }
+.progress-bar .fill.yellow { background: var(--yellow); }
+.progress-bar .fill.red { background: var(--red); }
+
+/* ─── 按钮 (圆角ghost) ─── */
+.btn-ghost {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-1); font-size: 12px; cursor: pointer; transition: all 0.15s;
+}
+.btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+.btn-ghost.active { border-color: var(--accent); color: var(--accent); background: rgba(9,105,218,.06); }
+.btn-ghost.loading { opacity: .6; pointer-events: none; }
+
+/* ─── Element Plus 白色覆盖 ─── */
+.el-table, .el-table tr, .el-table td, .el-table th {
+  background: var(--bg-card) !important; color: var(--text-1) !important;
+  border-color: var(--border-subtle) !important;
+}
+.el-table th.el-table__cell { background: #f9fafb !important; color: var(--text-3) !important; font-weight: 500; }
+.el-table tr:hover > td { background: var(--bg-hover) !important; }
+.el-loading-mask { background: rgba(255,255,255,.7) !important; }
+.el-progress-bar__outer { background: #eef0f2 !important; }
+.el-message { border-radius: var(--radius-sm) !important; }

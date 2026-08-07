@@ -1,0 +1,8 @@
+{
+  "api_url": "https://api.openai.com/v1/chat/completions",
+  "api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "model": "gpt-4o",
+  "system_prompt": "你是金鹰集团数据管理中心的AI助手...",
+  "temperature": 0.3,
+  "max_tokens": 4096
+}

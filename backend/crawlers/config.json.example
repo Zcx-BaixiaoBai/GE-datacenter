@@ -1,0 +1,14 @@
+{
+    "ruixin": {
+        "username": "your-ruixin-username",
+        "password": "your-ruixin-password",
+        "base_url": "http://netge.czrxdzonline.cn"
+    },
+    "budget": {
+        "username": "your-budget-username",
+        "password": "your-budget-password",
+        "login_url": "http://ecbpm.jinying.com:8090/wui/index.html"
+    },
+    "server_port": 5001,
+    "server_host": "0.0.0.0"
+}

@@ -1,0 +1,6 @@
+{
+  "admin_password_hash": "sha256-of-your-admin-password",
+  "project_passwords": {
+    "示例项目名": "sha256-of-project-password"
+  }
+}
