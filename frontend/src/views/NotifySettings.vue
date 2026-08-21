@@ -67,7 +67,7 @@
       <thead><tr><th>渠道</th><th>用户</th><th>名称</th><th>状态</th><th>分配项目</th><th>操作</th></tr></thead>
       <tbody>
         <tr v-for="u in displayUsers" :key="u.user_id">
-          <td>{{ u.channel === 'wechat' ? '微信' : '飞书' }}</td>
+          <td>{{ u.channel === 'wechat' ? '微信' : u.channel === 'feishu' ? '飞书' : '邮件' }}</td>
           <td style="font-size:11px">{{ u.user_id.substring(0,25) }}...</td>
           <td>{{ u.name }}</td>
           <td><span class="status-tag" :class="u.active ? 'good' : 'bad'">{{ u.active ? '已激活' : '未激活(需发消息)' }}</span></td>
@@ -94,7 +94,7 @@
       <tbody>
         <tr v-for="(cfg, name) in projects" :key="name">
           <td>{{ name }}</td>
-          <td>{{ cfg.channel === 'wechat' ? '微信' : '飞书' }}</td>
+          <td>{{ cfg.channel === 'wechat' ? '微信' : cfg.channel === 'feishu' ? '飞书' : '邮件' }}</td>
           <td style="font-size:11px">{{ cfg.target_user?.substring(0,20) }}...</td>
           <td><span class="status-tag" :class="cfg.enabled ? 'good' : 'bad'">{{ cfg.enabled ? '启用' : '禁用' }}</span></td>
           <td>
@@ -105,6 +105,19 @@
         <tr v-if="!Object.keys(projects).length"><td colspan="5" style="text-align:center;color:var(--text-3)">暂无配置</td></tr>
       </tbody>
     </table>
+
+    <!-- 新增邮件渠道配置 (管理员) -->
+    <div v-if="isAdm" style="margin-top:12px;padding:10px;border:1px dashed var(--border);border-radius:6px">
+      <div style="font-size:12px;font-weight:600;margin-bottom:8px">新增邮件推送配置</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select v-model="newEmailCfg.project_name" class="form-select" style="font-size:11px;padding:3px 6px;width:140px">
+          <option value="">选择项目</option>
+          <option v-for="p in projectList" :key="p" :value="p">{{ p }}</option>
+        </select>
+        <input v-model="newEmailCfg.target_user" placeholder="收件邮箱地址" class="form-input" style="font-size:11px;padding:3px 8px;width:220px" />
+        <button class="btn-primary" @click="addEmailNotify" style="font-size:11px;padding:3px 12px">添加</button>
+      </div>
+    </div>
 
     <!-- 日志 -->
     <div class="section-title" style="margin-top:20px">推送日志</div>
@@ -276,6 +289,19 @@ async function triggerAll() { try { const r = await api.triggerNotify(); ElMessa
 async function testSend(name) { try { const r = await api.testNotify(name); r.success ? ElMessage.success(r.message || '已发送') : ElMessage.error(r.error) } catch (e) { ElMessage.error(e.response?.data?.error || '发送失败') } }
 async function removeProject(name) { try { await api.deleteNotifyProject(name); ElMessage.success('已删除'); loadAll() } catch { ElMessage.error('删除失败') } }
 async function removeUser(uid) { try { await api.removeNotifyUser(uid); ElMessage.success('已删除用户'); loadAll() } catch { ElMessage.error('删除失败') } }
+
+const newEmailCfg = reactive({ project_name: '', target_user: '' })
+async function addEmailNotify() {
+  if (!newEmailCfg.project_name) { ElMessage.warning('请选择项目'); return }
+  if (!newEmailCfg.target_user || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(newEmailCfg.target_user)) { ElMessage.warning('请输入有效的邮箱地址'); return }
+  try {
+    await api.setNotifyProject({ project_name: newEmailCfg.project_name, channel: 'email', target_user: newEmailCfg.target_user, target_session: newEmailCfg.target_user, enabled: true })
+    ElMessage.success('邮件配置已添加')
+    newEmailCfg.project_name = ''
+    newEmailCfg.target_user = ''
+    loadAll()
+  } catch (e) { ElMessage.error(e.response?.data?.error || '添加失败') }
+}
 async function testFeishu() { try { feishuResult.value = await api.testFeishu() } catch (e) { feishuResult.value = { ok: false, msg: e.response?.data?.error || '测试失败' } } }
 
 onMounted(async () => { await loadAll(); timer = setInterval(loadAll, 10000) })

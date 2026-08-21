@@ -659,7 +659,7 @@ def ensure_data():
             print(f"[自动同步] 检测到默认xlsx, 开始同步...")
             sync_from_xlsx(default_xlsx, do_reset=True)
 
-    # 自动启动微信和飞书的长连接
+    # 自动启动微信和飞书的长连接 (单独try, 失败不影响调度器)
     try:
         import notifier
         # 微信: 如果已登录, 启动消息轮询
@@ -672,13 +672,29 @@ def ensure_data():
         if creds.get('app_id'):
             print("[自动启动] 飞书WebSocket...")
             notifier._start_feishu_ws()
-        # 通知调度器: 若配置已启用, 自动恢复定时推送 (无需前端手动点)
+    except Exception as e:
+        print(f"[启动] 长连接启动失败: {e}")
+
+    # 通知调度器: 若配置已启用, 自动恢复定时推送 (独立try, 不受长连接影响)
+    try:
+        import notifier
         notify_cfg = notifier._load_config()
         if notify_cfg.get('enabled'):
             print("[自动启动] 通知调度器...")
             notifier.scheduler_start()
     except Exception as e:
-        print(f"[启动] 长连接启动失败: {e}")
+        print(f"[启动] 通知调度器启动失败: {e}")
+
+    # 数据同步调度器: 若有模块设了间隔, 自动恢复定时同步 (独立try)
+    try:
+        import sync_controller
+        sync_cfg = sync_controller._load_sync_config()
+        has_interval = any(sync_cfg.get(f'{mid}_interval_min', 0) > 0 for mid in sync_controller.MODULES)
+        if has_interval:
+            print("[自动启动] 数据同步调度器...")
+            sync_controller.scheduler_start()
+    except Exception as e:
+        print(f"[启动] 数据同步调度器启动失败: {e}")
 
 
 if __name__ == '__main__':

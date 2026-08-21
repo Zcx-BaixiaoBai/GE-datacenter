@@ -51,7 +51,7 @@ import api from '../api'
 
 const loading = ref(true)
 const data = ref({ summary: {}, projects: [], categories: [] })
-const activeCat = ref('商贸总预算')
+const activeCat = ref('3.1维保类')
 const categories = computed(() => data.value.categories || [])
 const summaryCats = computed(() => { const a = data.value.categories || []; return a.length > 6 ? a.slice(0,6) : a })
 const filtered = computed(() => (data.value.projects||[]).filter(p => p.categories && p.categories[activeCat.value]))

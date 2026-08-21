@@ -20,6 +20,8 @@ data/feishu_creds.json
 data/notify_config.json
 data/wechat_token.json
 data/wechat_users.json
+data/notify_logs.json
+data/send_state.json
 
 # 爬虫配置（含各系统登录账号密码）
 backend/crawlers/config.json

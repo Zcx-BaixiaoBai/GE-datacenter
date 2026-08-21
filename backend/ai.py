@@ -139,6 +139,8 @@ def build_data_context(is_admin=False):
     ctx += "fault_desc(故障描述), device_status(设备状态:在线), comm_status(通讯状态), data_time(数据时间), balance(余额)"
     ctx += "\n  查故障电表: SELECT project_name, install_addr, room, fault_tag, fault_desc FROM ruixin_meters "
     ctx += "WHERE project_name = '项目名' AND fault_tag != '' AND fault_tag IS NOT NULL"
+    ctx += "\n  ⚠ 重要: fault_tag的值带【】括号(如【无签呈后付费】、【离线】、【异常送电】), "
+    ctx += "查询时务必用 LIKE '%关键字%' 而非精确匹配, 否则返回0行"
     ctx += "\n- equipment_123: 设备明细. 关键字段: project_name, device_name, online_status, device_status, comm_delay(通讯时差), last_comm"
     ctx += "\n  查故障设备: SELECT project_name, device_name, last_comm, comm_delay FROM equipment_123 "
     ctx += "WHERE project_name = '项目名' AND comm_delay >= 90"
@@ -507,15 +509,20 @@ def chat(user_message, history=None, user_id=None, is_admin=False):
         data = resp.json()
         reply = data.get('choices', [{}])[0].get('message', {}).get('content', '')
 
-        # 检查AI是否要求查数据库
-        query_results = _extract_and_run_queries(reply)
-        if query_results:
+        # 循环执行数据库查询 (最多5轮, 防止AI无限查询)
+        # 修复: 原代码只支持1轮查询, 第2轮回复中的[QUERY]标记会泄漏给用户
+        _MAX_QUERY_ROUNDS = 5
+        for _query_round in range(_MAX_QUERY_ROUNDS):
+            query_results = _extract_and_run_queries(reply)
+            if not query_results:
+                break
+
             query_context = '\n'.join(query_results)
             messages.append({"role": "assistant", "content": reply})
             messages.append({"role": "system", "content": "以下是数据库查询结果:\n" + query_context +
                 "\n请基于以上查询结果, 给用户一个完整、准确的回答。不要包含SQL语句, 直接给出分析结果。"})
 
-            resp2 = requests.post(
+            resp = requests.post(
                 api_url,
                 headers={
                     "Authorization": f"Bearer {cfg['api_key']}",
@@ -529,9 +536,9 @@ def chat(user_message, history=None, user_id=None, is_admin=False):
                 },
                 timeout=120,
             )
-            resp2.raise_for_status()
-            data2 = resp2.json()
-            reply = data2.get('choices', [{}])[0].get('message', {}).get('content', reply)
+            resp.raise_for_status()
+            data = resp.json()
+            reply = data.get('choices', [{}])[0].get('message', {}).get('content', reply)
 
         # 管理员: 检查并执行登记写库操作
         register_results = _extract_and_run_registers(reply, operator=user_id or 'admin') if is_admin else []
@@ -542,7 +549,7 @@ def chat(user_message, history=None, user_id=None, is_admin=False):
                 "\n请基于以上执行结果, 向用户确认登记是否成功。明确告知登记的电表/房间、结果(成功/重复/失败)。"
                 "若登记成功, 说明该电表的故障标记已通过重算消除。不要包含标记语法, 直接用自然语言回答。"})
 
-            resp3 = requests.post(
+            resp = requests.post(
                 api_url,
                 headers={
                     "Authorization": f"Bearer {cfg['api_key']}",
@@ -556,9 +563,9 @@ def chat(user_message, history=None, user_id=None, is_admin=False):
                 },
                 timeout=120,
             )
-            resp3.raise_for_status()
-            data3 = resp3.json()
-            reply = data3.get('choices', [{}])[0].get('message', {}).get('content', reply)
+            resp.raise_for_status()
+            data = resp.json()
+            reply = data.get('choices', [{}])[0].get('message', {}).get('content', reply)
 
         # 保存AI回复到会话历史
         if user_id:

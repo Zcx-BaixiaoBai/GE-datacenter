@@ -16,6 +16,7 @@ import json
 import base64
 import secrets
 import time
+import tempfile
 import threading
 import requests
 import segno
@@ -27,6 +28,8 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 CONFIG_FILE = os.path.join(DATA_DIR, 'notify_config.json')
 WECHAT_TOKEN_FILE = os.path.join(DATA_DIR, 'wechat_token.json')
 WECHAT_USERS_FILE = os.path.join(DATA_DIR, 'wechat_users.json')
+# 推送状态持久化(重启后恢复, 避免重复推送/漏推)
+SEND_STATE_FILE = os.path.join(DATA_DIR, 'send_state.json')
 
 ILINK_BASE = "https://ilinkai.weixin.qq.com"
 FEISHU_BASE = "https://open.feishu.cn"
@@ -42,6 +45,17 @@ _notify_logs = []
 _scheduler_running = False
 _scheduler_thread = None
 _last_send_date = None
+
+
+def _save_send_state():
+    """持久化推送状态(重启后恢复, 避免重复推送/漏推)"""
+    global _last_send_date
+    try:
+        with open(SEND_STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'last_send_date': _last_send_date,
+                       'saved_at': datetime.now().isoformat()}, f, ensure_ascii=False)
+    except Exception:
+        pass
 
 # 飞书 token 缓存
 _feishu_token = None
@@ -102,14 +116,51 @@ def delete_project_config(project_name):
 
 def _add_log(project, status, msg):
     t = datetime.now().strftime('%H:%M:%S')
-    _notify_logs.append({'time': t, 'date': datetime.now().strftime('%Y-%m-%d'),
-                          'project': project, 'status': status, 'msg': msg})
+    entry = {'time': t, 'date': datetime.now().strftime('%Y-%m-%d'),
+             'project': project, 'status': status, 'msg': msg}
+    _notify_logs.append(entry)
     if len(_notify_logs) > 200:
         _notify_logs[:] = _notify_logs[-100:]
+    # 持久化到独立的日志文件, 不碰配置文件
+    try:
+        import json as _json
+        log_file = os.path.join(DATA_DIR, 'notify_logs.json')
+        logs = []
+        if os.path.exists(log_file):
+            with open(log_file, 'r', encoding='utf-8') as f:
+                logs = _json.load(f)
+        logs.append(entry)
+        if len(logs) > 500:
+            logs[:] = logs[-300:]
+        with open(log_file, 'w', encoding='utf-8') as f:
+            _json.dump(logs, f, ensure_ascii=False)
+    except Exception:
+        pass
 
 
 def get_logs(limit=50):
-    return list(reversed(_notify_logs[-limit:]))
+    """读取推送日志(重启不丢历史): 合并文件持久化历史 + 内存增量, 按时间去重"""
+    import json as _json
+    log_file = os.path.join(DATA_DIR, 'notify_logs.json')
+    file_logs = []
+    try:
+        if os.path.exists(log_file):
+            with open(log_file, 'r', encoding='utf-8') as f:
+                file_logs = _json.load(f) or []
+    except Exception:
+        pass
+    # 合并: 文件历史在前, 内存增量在后; 用 (date,time,project,msg) 去重
+    merged = list(file_logs)
+    seen = set()
+    for e in merged:
+        seen.add((e.get('date', ''), e.get('time', ''), e.get('project', ''), e.get('msg', '')))
+    for e in _notify_logs:
+        k = (e.get('date', ''), e.get('time', ''), e.get('project', ''), e.get('msg', ''))
+        if k not in seen:
+            merged.append(e)
+            seen.add(k)
+    # 最新的在前
+    return list(reversed(merged[-limit:])) if merged else []
 
 
 # ─── 微信 iLink Bot ─────────────────────────────────
@@ -802,67 +853,333 @@ def _feishu_send_message(open_id, text):
 # ─── 统一发送入口 ─────────────────────────────────
 
 def _build_project_message(project_name, data):
-    """构建项目日报消息"""
+    """构建项目日报消息 — 三系统必显示，底部附 datacenter 链接"""
     lines = [f'{project_name} - 管理数据日报', datetime.now().strftime('%Y-%m-%d %H:%M'), '']
 
-    meters = data.get('meters')
-    if meters:
-        lines.append('【瑞信电表】')
-        lines.append(f"总表具: {meters['total']}块")
-        lines.append(f"故障: {meters['fault']}块 (故障率{meters['fault_rate']*100:.2f}%)")
-        if meters['offline'] > 0: lines.append(f"⚠离线 {meters['offline']}块")
-        if meters['abnormal'] > 0: lines.append(f"⚠异常送电 {meters['abnormal']}块")
-        if meters['unpaid'] > 0: lines.append(f"⚠无签呈后付费 {meters['unpaid']}块")
-        lines.append(f"评价: {meters['evaluation']}")
-        lines.append('')
+    # ── 瑞信电表 ──
+    m = data.get('meters') or {}
+    lines.append('【瑞信电表】')
+    lines.append(f"总表具: {m.get('total', 0)}块")
+    lines.append(f"故障: {m.get('fault', 0)}块 (故障率{m.get('fault_rate', 0)*100:.2f}%)")
+    if m.get('offline', 0) > 0:
+        lines.append(f"⚠离线 {m['offline']}块")
+    if m.get('abnormal', 0) > 0:
+        lines.append(f"⚠异常送电 {m['abnormal']}块")
+    if m.get('unpaid', 0) > 0:
+        lines.append(f"⚠无签呈后付费 {m['unpaid']}块")
+    lines.append(f"评价: {m.get('evaluation', '-')}")
+    lines.append('')
 
-    safety = data.get('safety')
-    if safety:
-        lines.append('【金鹰安全】')
-        total_h = safety['hazard_general'] + safety['hazard_serious'] + safety['hazard_major']
-        lines.append(f"隐患: {total_h}条 (一般{safety['hazard_general']}/严重{safety['hazard_serious']}/重大{safety['hazard_major']})")
-        if safety['overdue'] > 0: lines.append(f"⚠逾期未完成 {safety['overdue']}条")
-        if safety['imminent'] > 0: lines.append(f"⚠即将逾期 {safety['imminent']}条")
-        if safety['duty_overdue'] > 0: lines.append(f"⚠履职已逾期 {safety['duty_overdue']}条")
-        if safety['wp_low'] > 0: lines.append(f"⚠水压失压 {safety['wp_low']}处")
-        lines.append('')
+    # ── 金鹰安全 ──
+    s = data.get('safety') or {}
+    lines.append('【金鹰安全】')
+    total_h = s.get('hazard_general', 0) + s.get('hazard_serious', 0) + s.get('hazard_major', 0)
+    lines.append(f"隐患: {total_h}条 (一般{s.get('hazard_general', 0)}/严重{s.get('hazard_serious', 0)}/重大{s.get('hazard_major', 0)})")
+    if s.get('overdue', 0) > 0:
+        lines.append(f"⚠逾期未完成 {s['overdue']}条")
+    if s.get('imminent', 0) > 0:
+        lines.append(f"⚠即将逾期 {s['imminent']}条")
+    if s.get('pending', 0) > 0:
+        lines.append(f"未完成 {s['pending']}条")
+    if s.get('duty_completed', 0) > 0 or s.get('duty_started', 0) > 0 or s.get('duty_reporting', 0) > 0:
+        lines.append(f"履职: 已完成{s.get('duty_completed', 0)}/已开始{s.get('duty_started', 0)}/报备中{s.get('duty_reporting', 0)}")
+    if s.get('duty_overdue', 0) > 0:
+        lines.append(f"⚠履职已逾期 {s['duty_overdue']}条")
+    if s.get('duty_overdue_done', 0) > 0:
+        lines.append(f"履职逾期完成 {s['duty_overdue_done']}条")
+    if s.get('wp_low', 0) + s.get('wp_high', 0) + s.get('wp_offline', 0) > 0:
+        wp_parts = []
+        if s.get('wp_low', 0) > 0:
+            wp_parts.append(f"失压{s['wp_low']}处")
+        if s.get('wp_high', 0) > 0:
+            wp_parts.append(f"超压{s['wp_high']}处")
+        if s.get('wp_offline', 0) > 0:
+            wp_parts.append(f"离线{s['wp_offline']}处")
+        lines.append(f"⚠水压异常: {'/'.join(wp_parts)}")
+    lines.append('')
 
-    equip = data.get('equipment')
-    if equip:
-        lines.append('【123设备】')
-        lines.append(f"总设备: {equip['total']}台, 故障: {equip['fault']}台 (故障率{equip['fault_rate']*100:.1f}%)")
-        lines.append('')
+    # ── 123设备 ──
+    e = data.get('equipment') or {}
+    lines.append('【123设备】')
+    lines.append(f"总设备: {e.get('total', 0)}台, 故障: {e.get('fault', 0)}台 (故障率{e.get('fault_rate', 0)*100:.1f}%)")
+    lines.append('')
 
-    has_alert = (meters and meters['fault'] > 0) or \
-                (safety and (safety['overdue'] > 0 or safety['imminent'] > 0 or safety['wp_low'] > 0)) or \
-                (equip and equip['fault'] > 0)
+    # ── 告警汇总 ──
+    has_alert = (m.get('fault', 0) > 0) or \
+                (s.get('overdue', 0) > 0 or s.get('imminent', 0) > 0 or
+                 s.get('duty_overdue', 0) > 0 or s.get('wp_low', 0) > 0 or s.get('wp_high', 0) > 0) or \
+                (e.get('fault', 0) > 0)
     if not has_alert:
         lines.append('各项指标正常，无异常告警')
+    else:
+        lines.append('⚠ 存在异常项，详见附件故障明细')
+
+    # ── datacenter 链接 ──
+    lines.append('')
+    lines.append(f'查看完整数据: {_DATACENTER_URL}')
 
     return '\n'.join(lines)
 
 
 def _get_project_data(project_name):
+    """获取项目三系统数据，确保三个模块都返回(无数据则返回零值)"""
     from calc import calc_meters, calc_safety, calc_equipment
-    data = {}
+
+    # ── 瑞信电表 ──
+    meters_proj = None
     for p in calc_meters()['projects']:
         if p['project_name'] == project_name:
-            data['meters'] = p
+            meters_proj = p
             break
+    if not meters_proj:
+        meters_proj = {
+            'project_name': project_name, 'total': 0, 'fault': 0,
+            'offline': 0, 'abnormal': 0, 'unpaid': 0,
+            'fault_rate': 0, 'evaluation': '-',
+        }
+
+    # ── 金鹰安全 ──
+    safety_proj = None
     for p in calc_safety()['projects']:
         if p['project_name'] == project_name:
-            data['safety'] = {
-                'hazard_general': p['hazard_general'], 'hazard_serious': p['hazard_serious'],
-                'hazard_major': p['hazard_major'], 'overdue': p['overdue'],
-                'imminent': p['imminent'], 'duty_overdue': p['duty_overdue'],
-                'wp_low': p['wp_low'],
-            }
+            safety_proj = p
             break
+    if not safety_proj:
+        safety_proj = {
+            'project_name': project_name, 'hazard_general': 0, 'hazard_serious': 0,
+            'hazard_major': 0, 'overdue': 0, 'imminent': 0, 'pending': 0,
+            'duty_completed': 0, 'duty_overdue_done': 0, 'duty_started': 0,
+            'duty_overdue': 0, 'duty_reporting': 0,
+            'wp_low': 0, 'wp_high': 0, 'wp_offline': 0,
+        }
+
+    # ── 123设备 ──
+    equip_proj = None
     for p in calc_equipment()['projects']:
         if p['project_name'] == project_name:
-            data['equipment'] = p
+            equip_proj = p
             break
-    return data
+    if not equip_proj:
+        equip_proj = {
+            'project_name': project_name, 'total': 0, 'fault': 0, 'fault_rate': 0,
+        }
+
+    return {'meters': meters_proj, 'safety': safety_proj, 'equipment': equip_proj}
+
+
+# datacenter 访问地址
+_DATACENTER_URL = os.environ.get('DATACENTER_URL', 'http://datacenter.zcx-baixiaobai.cn')
+
+
+def _build_fault_detail_xlsx(project_name, data):
+    """生成故障明细xlsx附件(三个sheet: 瑞信电表/金鹰安全/123设备)，返回临时文件路径"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from db import get_conn
+    conn = get_conn()
+
+    wb = Workbook()
+    # 删默认sheet
+    wb.remove(wb.active)
+
+    # 样式
+    hdr_font = Font(bold=True, size=11, color='FFFFFF')
+    hdr_fill = PatternFill('solid', fgColor='2F5496')
+    warn_fill = PatternFill('solid', fgColor='FFF2CC')
+    border = Border(*(Side(style='thin', color='D9D9D9'),) * 4)
+    hdr_align = Alignment(horizontal='center', vertical='center')
+    body_align = Alignment(vertical='center', wrap_text=True)
+
+    def _style_header(ws):
+        for cell in ws[1]:
+            cell.font = hdr_font
+            cell.fill = hdr_fill
+            cell.alignment = hdr_align
+            cell.border = border
+        ws.freeze_panes = 'A2'
+
+    def _style_body(ws, n_rows):
+        for row in ws.iter_rows(min_row=2, max_row=n_rows + 1):
+            for cell in row:
+                cell.border = border
+                cell.alignment = body_align
+        # 自动列宽
+        for col in ws.columns:
+            max_len = max(len(str(c.value or '')) for c in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max_len * 1.8 + 2, 40)
+
+    has_any = False
+
+    # ════════════════ Sheet 1: 瑞信电表 ════════════════
+    m = data.get('meters', {})
+    ws1 = wb.create_sheet('瑞信电表')
+    m_headers = ['设备ID', '楼栋', '楼层', '房间', '故障类型', '故障描述', '通讯状态', '设备状态', '余额']
+    ws1.append(m_headers)
+    m_count = 0
+    if m.get('total', 0) > 0:
+        m_faults = conn.execute("""
+            SELECT device_id, building, floor, room, comm_status, device_status,
+                   fault_tag, fault_desc, balance
+            FROM ruixin_meters
+            WHERE project_name=? AND (fault_tag IS NOT NULL AND fault_tag != '')
+            ORDER BY fault_tag, device_id
+        """, (project_name,)).fetchall()
+        for r in m_faults:
+            ws1.append([
+                r['device_id'] or '', r['building'] or '', r['floor'] or '',
+                r['room'] or '', r['fault_tag'] or '', r['fault_desc'] or '',
+                r['comm_status'] or '', r['device_status'] or '',
+                r['balance'] or '',
+            ])
+            m_count += 1
+    _style_header(ws1)
+    _style_body(ws1, m_count)
+    if m_count > 0:
+        has_any = True
+
+    # ════════════════ Sheet 2: 金鹰安全 ════════════════
+    s = data.get('safety', {})
+    ws2 = wb.create_sheet('金鹰安全')
+    ws2.append(['类别', '子类别', '描述', '责任人', '状态', '剩余天数', '创建时间'])
+    s_count = 0
+    # 隐患核查(未整改)
+    if s.get('hazard_general', 0) + s.get('hazard_serious', 0) + s.get('hazard_major', 0) > 0:
+        s_faults = conn.execute("""
+            SELECT category, level, responsible, description, hazard_status,
+                   remaining_days, create_time
+            FROM hazard_inspection
+            WHERE project_name=? AND create_days <= 31 AND hazard_status != '已整改'
+            ORDER BY level, remaining_days
+        """, (project_name,)).fetchall()
+        for r in s_faults:
+            ws2.append([
+                '隐患核查', r['level'] or '', r['description'] or '',
+                r['responsible'] or '', r['hazard_status'] or '',
+                f"{r['remaining_days']}天" if r['remaining_days'] is not None else '',
+                r['create_time'] or '',
+            ])
+            s_count += 1
+    # 履职逾期
+    if s.get('duty_overdue', 0) > 0:
+        d_faults = conn.execute("""
+            SELECT plan_type, plan_content, responsible, plan_status, countdown,
+                   start_date, end_date
+            FROM safety_duty
+            WHERE unit=? AND plan_status='已逾期'
+        """, (project_name,)).fetchall()
+        for r in d_faults:
+            ws2.append([
+                '履职逾期', r['plan_type'] or '', r['plan_content'] or '',
+                r['responsible'] or '', r['plan_status'] or '',
+                f"倒计时{r['countdown']}天" if r['countdown'] is not None else '',
+                f"{r['start_date'] or ''}~{r['end_date'] or ''}",
+            ])
+            s_count += 1
+    # 水压异常
+    if s.get('wp_low', 0) + s.get('wp_high', 0) > 0:
+        w_faults = conn.execute("""
+            SELECT device_no, device_name, install_loc, pressure, pressure_fault,
+                   report_time, comm_delay, online_status
+            FROM water_pressure
+            WHERE project_name=? AND (pressure_fault='失压' OR pressure_fault='超压')
+        """, (project_name,)).fetchall()
+        for r in w_faults:
+            ws2.append([
+                '水压异常', r['pressure_fault'] or '',
+                f"{r['device_name'] or ''} {r['install_loc'] or ''} 压力值{r['pressure'] or ''}",
+                r['device_no'] or '', r['online_status'] or '',
+                f"时差{r['comm_delay']}天" if r['comm_delay'] is not None else '',
+                r['report_time'] or '',
+            ])
+            s_count += 1
+    _style_header(ws2)
+    _style_body(ws2, s_count)
+    if s_count > 0:
+        has_any = True
+
+    # ════════════════ Sheet 3: 123设备 ════════════════
+    e = data.get('equipment', {})
+    ws3 = wb.create_sheet('123设备')
+    ws3.append(['设备ID', '设备名称', '设备类型', '设备分组', '在线状态', '设备状态', '最后通讯', '通讯时差(天)'])
+    e_count = 0
+    if e.get('fault', 0) > 0:
+        e_faults = conn.execute("""
+            SELECT device_id, device_name, device_type, device_group, online_status,
+                   device_status, last_comm, comm_delay
+            FROM equipment_123
+            WHERE project_name=? AND comm_delay >= 90
+            ORDER BY comm_delay DESC
+        """, (project_name,)).fetchall()
+        for r in e_faults:
+            ws3.append([
+                r['device_id'] or '', r['device_name'] or '', r['device_type'] or '',
+                r['device_group'] or '', r['online_status'] or '', r['device_status'] or '',
+                r['last_comm'] or '', r['comm_delay'] if r['comm_delay'] is not None else '',
+            ])
+            e_count += 1
+    _style_header(ws3)
+    _style_body(ws3, e_count)
+    if e_count > 0:
+        has_any = True
+
+    conn.close()
+
+    if not has_any:
+        return None  # 无任何故障明细，不生成附件
+
+    # 写 xlsx 临时文件
+    fd, tmp = tempfile.mkstemp(suffix='.xlsx', prefix='fault_detail_', dir=DATA_DIR)
+    os.close(fd)  # openpyxl 需要自己打开文件句柄
+    wb.save(tmp)
+    return tmp
+
+
+def _email_send_message(to_email, subject, content, attachment=None):
+    """通过 agently-cli (QQ邮箱 Agent Mail) 发送邮件
+    依赖本机已完成 `agently-cli auth login` 授权。
+    attachment: CSV 文件绝对路径(可选), 自动转相对路径传给 --attachment
+    返回 (ok: bool, msg: str)，与 _wechat/_feishu_send_message 接口一致。
+    """
+    import subprocess
+    cli = os.environ.get('AGENTLY_CLI', r'C:\Users\Administrator\AppData\Roaming\npm\agently-cli.cmd')
+    if not os.path.exists(cli):
+        cli = 'agently-cli'  # fallback 到 PATH
+    tmp = None
+    try:
+        # 正文写临时文件(--body-file), 避免命令行长度/特殊字符/引号转义问题
+        fd, tmp = tempfile.mkstemp(suffix='.html', prefix='notify_', dir=DATA_DIR)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            # 纯文本换行转 <br>, 邮件正文按 HTML 渲染
+            f.write(str(content).replace('\n', '<br>'))
+        # agently-cli 要求 --body-file 为相对路径; 设 cwd=DATA_DIR 后只传文件名
+        body_rel = os.path.basename(tmp)
+        # --confirmed 免两阶段确认(自动化发信); shell=True 让 Windows 能找到 .cmd
+        cmd = '"{}" message +send --to "{}" --subject "{}" --body-file "{}"'.format(
+            cli, to_email, subject, body_rel)
+        # 附件: 相对路径
+        if attachment and os.path.exists(attachment):
+            att_rel = os.path.basename(attachment)
+            cmd += ' --attachment "{}"'.format(att_rel)
+        cmd += ' --confirmed'
+        r = subprocess.run(cmd, capture_output=True, timeout=120,
+                           shell=True, encoding='utf-8', errors='replace',
+                           cwd=DATA_DIR)
+        if r.returncode == 0:
+            return True, '邮件已发送至 {}'.format(to_email)
+        err = (r.stderr or r.stdout or '').strip()
+        return False, '邮件发送失败(exit {}): {}'.format(r.returncode, err[-500:])
+    except FileNotFoundError:
+        return False, '未找到 agently-cli，请先 npm install -g @tencent-qqmail/agently-cli'
+    except subprocess.TimeoutExpired:
+        return False, '邮件发送超时(120s)'
+    except Exception as e:
+        return False, '邮件发送异常: {}'.format(e)
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
 
 
 def send_to_project(project_name):
@@ -885,6 +1202,18 @@ def send_to_project(project_name):
         ok, msg = _wechat_send_message(target_user, content)
     elif channel == 'feishu':
         ok, msg = _feishu_send_message(target_user, content)
+    elif channel == 'email':
+        subject = '【金鹰数据日报】{}'.format(project_name)
+        # 生成故障明细xlsx附件(无故障则返回None)
+        xlsx_path = _build_fault_detail_xlsx(project_name, data)
+        try:
+            ok, msg = _email_send_message(target_user, subject, content, attachment=xlsx_path)
+        finally:
+            if xlsx_path and os.path.exists(xlsx_path):
+                try:
+                    os.remove(xlsx_path)
+                except Exception:
+                    pass
     else:
         return {'error': f'不支持的渠道: {channel}'}
 
@@ -899,9 +1228,14 @@ def send_to_all():
     results = []
     for proj_name, pcfg in projects.items():
         if pcfg.get('enabled'):
-            r = send_to_project(proj_name)
-            results.append({'project': proj_name, **r})
-            time.sleep(1)
+            try:
+                r = send_to_project(proj_name)
+                results.append({'project': proj_name, **r})
+            except Exception as e:
+                _add_log(proj_name, 'error', f'推送异常: {str(e)[:80]}')
+                results.append({'project': proj_name, 'error': str(e)[:100]})
+            # agently-cli 限制: 10封/分钟, 间隔7秒确保不超限
+            time.sleep(7)
     return {'results': results, 'total': len(results)}
 
 
@@ -920,6 +1254,8 @@ def test_send(project_name):
         ok, msg = _wechat_send_message(target_user, content)
     elif channel == 'feishu':
         ok, msg = _feishu_send_message(target_user, content)
+    elif channel == 'email':
+        ok, msg = _email_send_message(target_user, '金鹰数据中心测试通知', content)
     else:
         return {'error': f'不支持的渠道: {channel}'}
 
@@ -956,6 +1292,36 @@ def _scheduler_loop():
     _scheduler_running = True
     _add_log('scheduler', 'info', '通知调度循环开始')
 
+    # 启动时从文件恢复上次推送日期, 避免重启后重复推送
+    try:
+        if os.path.exists(SEND_STATE_FILE):
+            with open(SEND_STATE_FILE, 'r', encoding='utf-8') as f:
+                st = json.load(f) or {}
+            _last_send_date = st.get('last_send_date')
+            _add_log('scheduler', 'info', f'恢复推送状态: last_send_date={_last_send_date}')
+    except Exception as e:
+        _add_log('scheduler', 'error', f'恢复推送状态失败: {str(e)[:80]}')
+
+    # 启动补推: 如果今天该推但还没推(enabled 且今天没推过), 启动后立即补推一次
+    try:
+        cfg0 = _load_config()
+        today0 = datetime.now().strftime('%Y-%m-%d')
+        if cfg0.get('enabled') and _last_send_date != today0:
+            _add_log('scheduler', 'info', '启动补推: 今天尚未推送, 立即执行')
+            _last_send_date = today0
+            _save_send_state()
+            try:
+                result = send_to_all()
+                ok = sum(1 for x in result['results'] if x.get('success'))
+                fail = sum(1 for x in result['results'] if x.get('error'))
+                _add_log('scheduler', 'info', f'启动补推完成: {result["total"]}个项目(成功{ok}/失败{fail})')
+            except Exception as e:
+                _add_log('scheduler', 'error', f'启动补推异常: {str(e)[:80]}')
+                _last_send_date = None
+                _save_send_state()
+    except Exception as e:
+        _add_log('scheduler', 'error', f'启动补推检查异常: {str(e)[:80]}')
+
     while _scheduler_running:
         try:
             cfg = _load_config()
@@ -968,11 +1334,21 @@ def _scheduler_loop():
             current_time = now.strftime('%H:%M')
             today = now.strftime('%Y-%m-%d')
 
+            # 时间窗口匹配: 当前分钟 == 目标时间 且 今天还没推过
             if current_time == target_time and _last_send_date != today:
                 _last_send_date = today
+                _save_send_state()
                 _add_log('scheduler', 'info', f'开始每日推送 ({target_time})')
-                result = send_to_all()
-                _add_log('scheduler', 'info', f'每日推送完成: {result["total"]}个项目')
+                try:
+                    result = send_to_all()
+                    ok = sum(1 for x in result['results'] if x.get('success'))
+                    fail = sum(1 for x in result['results'] if x.get('error'))
+                    _add_log('scheduler', 'info', f'每日推送完成: {result["total"]}个项目(成功{ok}/失败{fail})')
+                except Exception as e:
+                    _add_log('scheduler', 'error', f'每日推送异常: {str(e)[:80]}')
+                    # 推送异常不重置_last_send_date, 下一轮还能重试
+                    _last_send_date = None
+                    _save_send_state()
 
             time.sleep(30)
         except Exception as e:
