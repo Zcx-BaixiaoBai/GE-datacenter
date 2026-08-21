@@ -8,6 +8,7 @@ const routes = [
   { path: '/budget', name: 'budget', component: () => import('./views/Budget.vue'), meta: { title: '预算使用' } },
   { path: '/login', name: 'login', component: () => import('./views/Login.vue'), meta: { title: '登录' } },
   { path: '/notify', name: 'notify', component: () => import('./views/NotifySettings.vue'), meta: { title: '通知推送', requiresAuth: true } },
+  { path: '/workorder', name: 'workorder', component: () => import('./views/WorkOrderSettings.vue'), meta: { title: '工单推送', requiresAdmin: true } },
   { path: '/sync-center', name: 'syncCenter', component: () => import('./views/SyncCenter.vue'), meta: { title: '数据同步', requiresAdmin: true } },
   { path: '/admin', name: 'admin', component: () => import('./views/AdminSettings.vue'), meta: { title: '管理设置', requiresAdmin: true } },
 ]

@@ -69,6 +69,7 @@ const menu = [
   { path: '/equipment', label: '设备管理', icon: 'cpu', public: true },
   { path: '/budget', label: '预算使用', icon: 'budget', public: true },
   { path: '/notify', label: '通知推送', icon: 'alert', public: false },
+  { path: '/workorder', label: '工单推送', icon: 'activity', adminOnly: true },
   { path: '/sync-center', label: '数据同步', icon: 'server', adminOnly: true },
   { path: '/admin', label: '管理设置', icon: 'cpu', adminOnly: true },
 ]

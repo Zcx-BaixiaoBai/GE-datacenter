@@ -23,6 +23,13 @@ data/wechat_users.json
 data/notify_logs.json
 data/send_state.json
 
+# 工单推送运行时配置/数据（含报修电话、项目映射，用 *.example 作模板）
+data/workorder_config.json
+data/workorder_links.json
+data/workorder_mapping.json
+data/workorder_state.json
+data/workorder_logs.json
+
 # 爬虫配置（含各系统登录账号密码）
 backend/crawlers/config.json
 backend/crawlers/data/

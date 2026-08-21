@@ -20,6 +20,7 @@ import auth
 import ai
 import sync_controller
 import notifier
+import workorder
 from functools import wraps
 
 # ─── 路径配置 ──────────────────────────────
@@ -628,6 +629,125 @@ def api_notify_feishu_test():
     return jsonify({'ok': ok, 'msg': msg})
 
 
+# ═══════════════════════════════════════════════════════
+#  工单推送模块 (PMS 工单系统, 每周定时, 独立于日报)
+# ═══════════════════════════════════════════════════════
+
+@app.route('/api/workorder/config', methods=['GET', 'POST'])
+@require_admin
+def api_workorder_config():
+    if request.method == 'POST':
+        return jsonify(workorder.update_config(request.json))
+    cfg = workorder.get_config()
+    # creater_phone 脱敏返回
+    ph = cfg.get('creater_phone', '')
+    cfg['creater_phone_masked'] = ph[:3] + '****' + ph[-4:] if len(ph) >= 7 else ('****' if ph else '')
+    cfg['creater_phone'] = ''  # 不回传完整号
+    return jsonify(cfg)
+
+
+@app.route('/api/workorder/links', methods=['GET'])
+@require_admin
+def api_workorder_links():
+    return jsonify(workorder._load_links())
+
+
+@app.route('/api/workorder/links/refresh', methods=['POST'])
+@require_admin
+def api_workorder_links_refresh():
+    """对所有 guid 重新拉取 counter_id (只读)"""
+    return jsonify({'links': workorder.refresh_links()})
+
+
+@app.route('/api/workorder/mapping', methods=['GET', 'POST'])
+@require_admin
+def api_workorder_mapping():
+    if request.method == 'POST':
+        return jsonify({'mapping': workorder.update_mapping(request.json.get('mapping', request.json))})
+    return jsonify({'mapping': workorder._load_mapping(), 'options': workorder.get_project_options()})
+
+
+@app.route('/api/workorder/types', methods=['GET'])
+@require_admin
+def api_workorder_types():
+    """工单类型列表 (只读)"""
+    return jsonify({'types': workorder.get_worksheet_types(workorder.get_config(), refresh=True)})
+
+
+@app.route('/api/workorder/status', methods=['GET'])
+@require_admin
+def api_workorder_status():
+    cfg = workorder.get_config()
+    links = workorder._load_links()
+    mapping = workorder._load_mapping()
+    mapped = sum(1 for v in mapping.values() if v)
+    return jsonify({
+        'enabled': cfg.get('enabled', False),
+        'weekly_day': cfg.get('weekly_day', 1),
+        'weekly_time': cfg.get('weekly_time', '09:00'),
+        'creater_phone_set': bool(cfg.get('creater_phone', '')),
+        'scheduler_active': workorder.scheduler_is_active(),
+        'project_count': len(links),
+        'mapped_count': mapped,
+        'unmapped': [k for k, v in mapping.items() if not v],
+    })
+
+
+@app.route('/api/workorder/scheduler/start', methods=['POST'])
+@require_admin
+def api_workorder_scheduler_start():
+    return jsonify(workorder.scheduler_start())
+
+
+@app.route('/api/workorder/scheduler/stop', methods=['POST'])
+@require_admin
+def api_workorder_scheduler_stop():
+    return jsonify(workorder.scheduler_stop())
+
+
+@app.route('/api/workorder/trigger', methods=['POST'])
+@require_admin
+def api_workorder_trigger():
+    """立即对全部项目创建工单 (会真发 PMS)"""
+    return jsonify(workorder.send_all_workorders())
+
+
+@app.route('/api/workorder/test', methods=['POST'])
+@require_admin
+def api_workorder_test():
+    """对单个项目真发一条工单 (会真发 PMS, 用于验证)"""
+    prj = request.json.get('project', '')
+    if not prj:
+        return jsonify({'error': '缺少 project'}), 400
+    return jsonify(workorder.send_workorder(prj))
+
+
+@app.route('/api/workorder/logs', methods=['GET'])
+@require_admin
+def api_workorder_logs():
+    limit = request.args.get('limit', 50, type=int)
+    return jsonify(workorder.get_logs(limit))
+
+
+@app.route('/api/workorder/preview', methods=['GET'])
+@require_admin
+def api_workorder_preview():
+    """预览某项目的工单内容文本+计数(不发PMS)。project=系统全名"""
+    import io as _io
+    from flask import Response
+    db_name = request.args.get('project', '')
+    if not db_name:
+        return jsonify({'error': '缺少 project(系统项目名)'}), 400
+    content = workorder.build_fault_content(db_name)
+    if not content:
+        return jsonify({'skipped': True, 'message': '该项目无故障数据'})
+    return jsonify({
+        'q_content': content['q_content'],
+        'wy_type_name': content['wy_type_name'],
+        'counts': content['counts'],
+    })
+
+
 # ─── 静态文件托管(Vue前端) ──────────────────
 
 @app.route('/')
@@ -684,6 +804,15 @@ def ensure_data():
             notifier.scheduler_start()
     except Exception as e:
         print(f"[启动] 通知调度器启动失败: {e}")
+
+    # 工单推送调度器: 若配置已启用, 自动恢复每周定时 (独立try, 与日报零耦合)
+    try:
+        wo_cfg = workorder._load_config()
+        if wo_cfg.get('enabled'):
+            print("[自动启动] 工单推送调度器...")
+            workorder.scheduler_start()
+    except Exception as e:
+        print(f"[启动] 工单推送调度器启动失败: {e}")
 
     # 数据同步调度器: 若有模块设了间隔, 自动恢复定时同步 (独立try)
     try:

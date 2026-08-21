@@ -74,4 +74,20 @@ export default {
   stopFeishuWs: () => api.post('/notify/feishu/ws/stop').then(r => r.data),
   startWechatPoller: () => api.post('/notify/wechat/poller/start').then(r => r.data),
   stopWechatPoller: () => api.post('/notify/wechat/poller/stop').then(r => r.data),
+
+  // 工单推送 (PMS 工单系统, 每周定时, 独立于日报)
+  getWorkOrderConfig: () => api.get('/workorder/config').then(r => r.data),
+  updateWorkOrderConfig: (cfg) => api.post('/workorder/config', cfg).then(r => r.data),
+  getWorkOrderLinks: () => api.get('/workorder/links').then(r => r.data),
+  refreshWorkOrderLinks: () => api.post('/workorder/links/refresh', {}).then(r => r.data),
+  getWorkOrderMapping: () => api.get('/workorder/mapping').then(r => r.data),
+  updateWorkOrderMapping: (mapping) => api.post('/workorder/mapping', { mapping }).then(r => r.data),
+  getWorkOrderTypes: () => api.get('/workorder/types').then(r => r.data),
+  getWorkOrderStatus: () => api.get('/workorder/status').then(r => r.data),
+  startWorkOrderScheduler: () => api.post('/workorder/scheduler/start').then(r => r.data),
+  stopWorkOrderScheduler: () => api.post('/workorder/scheduler/stop').then(r => r.data),
+  triggerWorkOrder: () => api.post('/workorder/trigger').then(r => r.data),
+  testWorkOrder: (project) => api.post('/workorder/test', { project }).then(r => r.data),
+  getWorkOrderLogs: (limit = 50) => api.get('/workorder/logs', { params: { limit } }).then(r => r.data),
+  previewWorkOrder: (project) => api.get('/workorder/preview', { params: { project } }).then(r => r.data),
 }

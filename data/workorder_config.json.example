@@ -1,0 +1,11 @@
+{
+  "_说明": "工单推送配置。enabled 默认 false; creater_phone 填统一服务号(留空则推送跳过); weekly_day 1=周一..7=周日; projects 可按 prj 禁用个别项目",
+  "enabled": false,
+  "weekly_day": 1,
+  "weekly_time": "09:00",
+  "creater_phone": "13800000000",
+  "pms_api": "https://pms-api.jinying.com/api",
+  "projects": {
+    "_示例_南京金鹰世界": { "enabled": true }
+  }
+}
